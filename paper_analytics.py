@@ -69,3 +69,54 @@ def get_enhanced_paper_analytics(conn):
         "max_consecutive_losses": 0,
         "per_symbol_performance": {}
     }
+def get_daily_closed_trade_metrics(conn, target_date_utc=None):
+    """
+    Returns daily closed trade summary metrics for a given UTC date.
+    Read-only database query.
+    """
+    if target_date_utc is None:
+        from datetime import datetime, timezone
+        target_date_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    query = """
+        SELECT realized_pnl, return_pct
+        FROM paper_trades
+        WHERE status = 'CLOSED'
+          AND strftime('%Y-%m-%d', exit_time) = ?
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (target_date_utc,))
+        rows = cursor.fetchall()
+    except Exception:
+        # Fallback if paper_trades table or exit_time column is structured differently
+        rows = []
+
+    total_closed = len(rows)
+    if total_closed == 0:
+        return {
+            "total_closed": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "total_pnl": 0.0,
+            "avg_pnl": 0.0,
+            "target_date": target_date_utc
+        }
+
+    pnls = [r[0] for r in rows if r[0] is not None]
+    wins = len([p for p in pnls if p > 0])
+    losses = len([p for p in pnls if p < 0])
+    total_pnl = sum(pnls) if pnls else 0.0
+    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
+    avg_pnl = (total_pnl / total_closed) if total_closed > 0 else 0.0
+
+    return {
+        "total_closed": total_closed,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 2),
+        "total_pnl": round(total_pnl, 2),
+        "avg_pnl": round(avg_pnl, 2),
+        "target_date": target_date_utc
+    }
