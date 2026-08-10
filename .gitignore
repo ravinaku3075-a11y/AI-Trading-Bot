@@ -1,0 +1,10 @@
+﻿.agent_backups/
+dist/
+build/
+*.log
+logs/
+*.db
+*.csv
+venv/
+__pycache__/
+*.zip

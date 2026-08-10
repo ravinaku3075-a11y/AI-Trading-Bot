@@ -1,0 +1,44 @@
+import os
+import glob
+import requests
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+GROQ_API_KEY = "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"
+
+def generate_self_improvement_plan():
+    """Analyzes overall project footprint and generates automated improvement goals"""
+    py_files = sorted(glob.glob(os.path.join(PROJECT_DIR, "*.py")))
+    total_files = len(py_files)
+    
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    system_prompt = (
+        "You are an Autonomous AI System Architect focusing on Self-Improvement. "
+        "Provide a high-level Strategic Self-Improvement Roadmap for a Python Desktop Trading Assistant with 40+ modules. "
+        "List 4 key areas: 1. Core Refactoring 2. Performance Boost 3. Resilience & Error Handling 4. Feature Expansion. "
+        "Use clean Markdown formatting with clear bullet points."
+    )
+
+    user_prompt = f"Total Python Modules in System: {total_files}\nProvide a strategic self-improvement plan."
+
+    try:
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 400
+        }
+        res = requests.post(url, json=payload, headers=headers, timeout=12)
+        if res.status_code == 200:
+            return res.json()['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        return f"Error generating plan: {str(e)}"
+        
+    return "### Strategic Self-Improvement Plan\n- Optimize synchronous API requests with async background workers\n- Increase unit test isolation using mocks\n- Enhance centralized logging for real-time diagnostics"
