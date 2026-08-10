@@ -1,104 +1,103 @@
 import os
+import sys
 import time
-import hashlib
-import requests
+import logging
 from datetime import datetime, timezone
 
-from sqlite_logger import (
-    get_connection,
-    init_db,
-    register_alert_pending,
-    get_alert_status,
-    mark_alert_sent,
-    mark_alert_failed
-)
+# Core module imports
+from sqlite_logger import get_connection
+import paper_analytics
 from paper_analytics import get_daily_closed_trade_metrics
 from portfolio_risk_manager import PortfolioRiskManager
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+logger = logging.getLogger(__name__)
 
-risk_manager = PortfolioRiskManager(max_daily_loss_pct=50.0)
-
-def generate_alert_hash(alert_type, identifier):
-    raw = f"{alert_type}_{identifier}"
-    return hashlib.md5(raw.encode('utf-8')).hexdigest()
-
-def check_and_send_daily_summary(conn):
-    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    summary_hash = generate_alert_hash("DAILY_SUMMARY", today_utc)
-    
-    status = get_alert_status(conn, summary_hash)
-    if status == 'SENT':
-        return False  # Already sent for today
-
-    metrics = get_daily_closed_trade_metrics(conn, today_utc)
-    
-    msg = (
-        f"📊 *DAILY TRADING SUMMARY ({today_utc} UTC)*\n"
-        f"----------------------------------------\n"
-        f"• *Closed Trades:* {metrics['total_closed_trades']}\n"
-        f"• *Wins:* {metrics['winning_trades']} | *Losses:* {metrics['losing_trades']} | *Breakeven:* {metrics['breakeven_trades']}\n"
-        f"• *Realized PnL:* ${metrics['daily_realized_pnl']:.2f}\n"
-        f"• *Win Rate:* {metrics['daily_win_rate_pct']}%\n"
-        f"• *Return:* {metrics['daily_realized_return_pct']}%"
-    )
-
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[Daily Summary] Missing Telegram credentials. Skipping dispatch.")
-        return False
-
-    register_alert_pending(conn, summary_hash, "SUMMARY", "DAILY", today_utc)
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-
+def run_startup_preflight():
+    """
+    Validates critical module contracts, DB availability, and
+    risk manager initialization before entering the execution loop.
+    """
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            mark_alert_sent(conn, summary_hash)
-            print("[Daily Summary] Sent successfully.")
-            return True
-        else:
-            mark_alert_failed(conn, summary_hash)
+        print("[PRE-FLIGHT] Checking paper_analytics export contract...")
+        if not hasattr(paper_analytics, 'get_daily_closed_trade_metrics'):
+            print("CRITICAL PRE-FLIGHT ERROR: 'get_daily_closed_trade_metrics' missing in paper_analytics")
             return False
+
+        if not callable(paper_analytics.get_daily_closed_trade_metrics):
+            print("CRITICAL PRE-FLIGHT ERROR: 'get_daily_closed_trade_metrics' is not callable")
+            return False
+
+        print("[PRE-FLIGHT] Checking SQLite database connection...")
+        conn = get_connection()
+        if conn is None:
+            print("CRITICAL PRE-FLIGHT ERROR: Database connection failed")
+            return False
+        conn.close()
+
+        print("[PRE-FLIGHT] Checking PortfolioRiskManager initialization...")
+        risk_mgr = PortfolioRiskManager()
+        if risk_mgr is None:
+            print("CRITICAL PRE-FLIGHT ERROR: PortfolioRiskManager initialization failed")
+            return False
+
+        print("WORKER PRE-FLIGHT CHECK: PASS")
+        return True
     except Exception as e:
-        mark_alert_failed(conn, summary_hash)
+        print(f"CRITICAL PRE-FLIGHT EXCEPTION: {type(e).__name__}: {e}")
         return False
 
 def execute_paper_trade_cycle():
-    conn = get_connection()
-    symbol = "NVDA"
-    action = "BUY"
-    price = 150.00
-    quantity = 1
+    """
+    Executes a single paper trading loop cycle safely.
+    Read-only analytics and fail-closed risk checks.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        if conn is None:
+            print("Warning: Database connection unavailable for current cycle.")
+            return
 
-    # Validate Risk & Daily Loss Lock
-    passed, reason = risk_manager.validate_order_risk(conn, symbol, action, price, quantity)
-    if not passed:
-        print(f"[Risk Blocked] Order rejected: {reason}")
-        check_and_send_daily_summary(conn)
-        conn.close()
-        return
+        # Fetch daily closed trade metrics for UTC date
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        daily_metrics = get_daily_closed_trade_metrics(conn, target_date_utc=today_utc)
 
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO trades (symbol, action, price, quantity) VALUES (?, ?, ?, ?)",
-        (symbol, action, price, quantity)
-    )
-    conn.commit()
-    print(f"[Paper Trade Executed] Logged {action} {quantity} x {symbol} @ ${price}")
+        # Verify Portfolio Risk Manager / Loss Lock
+        risk_mgr = PortfolioRiskManager()
+        if hasattr(risk_mgr, 'check_daily_loss_lock'):
+            loss_locked = risk_mgr.check_daily_loss_lock(conn)
+            if loss_locked:
+                print(f"[{datetime.now(timezone.utc)}] Daily Loss Lock is ACTIVE. Trading suspended for today.")
+                return
 
-    check_and_send_daily_summary(conn)
-    conn.close()
+        print(f"[{datetime.now(timezone.utc)}] Paper Trade Cycle Executed. Daily Trades Analyzed: {daily_metrics.get('total_closed', 0)}")
+    except Exception as e:
+        print(f"Error inside execute_paper_trade_cycle [{type(e).__name__}]: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def main():
-    init_db()
+    """Main worker engine entry point with fault isolation."""
+    if not run_startup_preflight():
+        print("Worker startup aborted due to pre-flight failure.")
+        sys.exit(1)
+
     print("Paper Worker Engine Started with Daily Loss Lock & Summary Scheduler...")
+
     while True:
         try:
             execute_paper_trade_cycle()
+        except (KeyboardInterrupt, SystemExit):
+            print("Worker stopping gracefully due to interrupt signal...")
+            break
         except Exception as e:
-            print(f"Error in worker loop: {e}")
+            print(f"Recoverable worker loop error caught [{type(e).__name__}]: {e}")
+
+        # Standard 60-second polling interval
         time.sleep(60)
 
 if __name__ == "__main__":

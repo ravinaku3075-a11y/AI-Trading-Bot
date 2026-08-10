@@ -1,169 +1,145 @@
-import os
 import sys
-import traceback
-from datetime import datetime
-from dotenv import load_dotenv
+import unittest
+import sqlite3
+import paper_analytics
+import portfolio_risk_manager
+import sqlite_logger
 
-load_dotenv()
+class TestAutoCoderBugDetection(unittest.TestCase):
+    """Original Regression Suite (12 Tests)"""
 
-class RegressionTestRunner:
-    def __init__(self):
-        self.results = []
-        self.total_tests = 0
-        self.passed_tests = 0
-        self.failed_tests = 0
-        self.critical_failures = 0
+    def test_01_analytics_import(self):
+        self.assertTrue(hasattr(paper_analytics, 'get_daily_closed_trade_metrics'))
 
-    def log_result(self, category, name, status, error="", affected_module="", tb=""):
-        self.total_tests += 1
-        if status == "PASS":
-            self.passed_tests += 1
-        else:
-            self.failed_tests += 1
-            if category in ["Core", "AI Assistant"]:
-                self.critical_failures += 1
+    def test_02_daily_metrics_callable(self):
+        self.assertTrue(callable(paper_analytics.get_daily_closed_trade_metrics))
 
-        self.results.append({
-            "category": category,
-            "name": name,
-            "status": status,
-            "error": error,
-            "affected_module": affected_module,
-            "traceback": tb,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
+    def test_03_sqlite_connection_helper(self):
+        self.assertTrue(hasattr(sqlite_logger, 'get_connection'))
 
-    def run_all_tests(self):
-        print("Starting Automated Regression Tests...")
-        print("Testing Auto Coder Bug Detection\n")
+    def test_04_risk_manager_availability(self):
+        risk_mgr = portfolio_risk_manager.PortfolioRiskManager()
+        self.assertIsNotNone(risk_mgr)
 
-        # Test 1: File Structure Check
-        try:
-            required_files = ["ai_engine.py", "run_streamlit.py", "run_desktop.py"]
-            missing = [f for f in required_files if not os.path.exists(f)]
-            if not missing:
-                self.log_result("Core", "File Structure Check", "PASS")
-            else:
-                self.log_result("Core", "File Structure Check", "FAIL", f"Missing files: {missing}", "FileSystem")
-        except Exception as e:
-            self.log_result("Core", "File Structure Check", "FAIL", str(e), "FileSystem", traceback.format_exc())
+    def test_05_daily_metrics_structure(self):
+        conn = sqlite3.connect(":memory:")
+        metrics = paper_analytics.get_daily_closed_trade_metrics(conn, "2026-08-10")
+        self.assertIsInstance(metrics, dict)
+        self.assertIn("total_closed", metrics)
+        conn.close()
 
-        # Test 2: Virtual Environment Check
-        try:
-            if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
-                self.log_result("Core", "Virtual Environment", "PASS")
-            else:
-                self.log_result("Core", "Virtual Environment", "FAIL", "Venv not active", "PythonRuntime")
-        except Exception as e:
-            self.log_result("Core", "Virtual Environment", "FAIL", str(e), "PythonRuntime", traceback.format_exc())
+    def test_06_analytics_empty_db_handling(self):
+        conn = sqlite3.connect(":memory:")
+        metrics = paper_analytics.get_daily_closed_trade_metrics(conn, "2026-08-10")
+        self.assertEqual(metrics.get("total_closed", 0), 0)
+        conn.close()
 
-        # Test 3: Groq Engine Call
-        try:
-            groq_key = os.getenv("GROQ_API_KEY", "")
-            if groq_key and not groq_key.startswith("gsk_dummy"):
-                from groq import Groq
-                client = Groq(api_key=groq_key)
-                client.models.list()
-                self.log_result("AI Assistant", "Groq Engine Call", "PASS")
-            else:
-                self.log_result("AI Assistant", "Groq Engine Call", "PASS")
-        except Exception as e:
-            err_str = str(e).lower()
-            if "invalid_api_key" in err_str or "401" in err_str or "charmap" in err_str:
-                self.log_result("AI Assistant", "Groq Engine Call", "PASS")
-            else:
-                self.log_result("AI Assistant", "Groq Engine Call", "FAIL", str(e), "ai_engine", traceback.format_exc())
+    def test_07_portfolio_risk_manager_instantiation(self):
+        rm = portfolio_risk_manager.PortfolioRiskManager()
+        self.assertTrue(hasattr(rm, 'check_daily_loss_lock'))
 
-        # Test 4: Streamlit Script Integrity (UTF-8 Encoding Fixed)
-        try:
-            with open("run_streamlit.py", "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-            if "stcli.main()" not in content:
-                self.log_result("UI", "Streamlit Script Integrity", "PASS")
-            else:
-                self.log_result("UI", "Streamlit Script Integrity", "FAIL", "Deprecated stcli loop detected", "run_streamlit.py")
-        except Exception as e:
-            self.log_result("UI", "Streamlit Script Integrity", "FAIL", str(e), "run_streamlit.py", traceback.format_exc())
+    def test_08_sqlite_logger_connection_type(self):
+        conn = sqlite_logger.get_connection()
+        self.assertIsNotNone(conn)
+        conn.close()
 
-        # Test 5: Imports Verification
-        try:
-            import streamlit
-            import pandas
-            import numpy
-            self.log_result("Dependencies", "Module Imports", "PASS")
-        except Exception as e:
-            self.log_result("Dependencies", "Module Imports", "FAIL", str(e), "Dependencies", traceback.format_exc())
+    def test_09_analytics_schema_resilience(self):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE closed_trades (id INT, pnl REAL, close_time TEXT)")
+        metrics = paper_analytics.get_daily_closed_trade_metrics(conn, "2026-08-10")
+        self.assertIsInstance(metrics, dict)
+        conn.close()
 
-        # Test 6: Spec File Existence
-        try:
-            if os.path.exists("AI_Trading_Terminal.spec"):
-                self.log_result("Packaging", "PyInstaller Spec File", "PASS")
-            else:
-                self.log_result("Packaging", "PyInstaller Spec File", "FAIL", "Spec file missing", "PyInstaller")
-        except Exception as e:
-            self.log_result("Packaging", "PyInstaller Spec File", "FAIL", str(e), "PyInstaller", traceback.format_exc())
+    def test_10_analytics_date_filtering(self):
+        conn = sqlite3.connect(":memory:")
+        metrics = paper_analytics.get_daily_closed_trade_metrics(conn, "1999-01-01")
+        self.assertEqual(metrics.get("total_closed", 0), 0)
+        conn.close()
 
-        # Test 7: Secrets Exclusion Check
-        try:
-            dist_env = os.path.join("dist", "AI_Trading_Terminal", ".env")
-            if not os.path.exists(dist_env):
-                self.log_result("Security", "Secrets Exclusion", "PASS")
-            else:
-                self.log_result("Security", "Secrets Exclusion", "FAIL", ".env leaked in dist", "Packaging")
-        except Exception as e:
-            self.log_result("Security", "Secrets Exclusion", "PASS")
+    def test_11_risk_manager_loss_lock_type(self):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT,
+                action TEXT,
+                pnl REAL,
+                price REAL,
+                quantity INTEGER,
+                close_time TEXT,
+                status TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.commit()
+        rm = portfolio_risk_manager.PortfolioRiskManager()
+        res = rm.check_daily_loss_lock(conn)
+        self.assertIsInstance(res, (bool, tuple))
+        conn.close()
 
-        # Test 8: Desktop Runner Structure
-        try:
-            if os.path.exists("run_desktop.py"):
-                self.log_result("Core", "Desktop Launcher Script", "PASS")
-            else:
-                self.log_result("Core", "Desktop Launcher Script", "FAIL", "run_desktop.py missing", "Core")
-        except Exception as e:
-            self.log_result("Core", "Desktop Launcher Script", "FAIL", str(e), "Core", traceback.format_exc())
+    def test_12_logger_isolation(self):
+        self.assertTrue(callable(sqlite_logger.get_connection))
 
-        # Test 9: Logging Infrastructure
-        try:
-            self.log_result("Logging", "Execution Logger", "PASS")
-        except Exception as e:
-            self.log_result("Logging", "Execution Logger", "FAIL", str(e), "Logging", traceback.format_exc())
 
-        # Test 10: Multi-Processing Support
-        try:
-            import multiprocessing
-            self.log_result("Core", "Multiprocessing Freeze Support", "PASS")
-        except Exception as e:
-            self.log_result("Core", "Multiprocessing Freeze Support", "FAIL", str(e), "Core", traceback.format_exc())
+class TestWorkerImportContract(unittest.TestCase):
+    """New Hardening & Crash Prevention Suite (6 Tests)"""
 
-        # Test 11: Webbrowser Controller
-        try:
-            import webbrowser
-            self.log_result("UI", "Browser Controller Integration", "PASS")
-        except Exception as e:
-            self.log_result("UI", "Browser Controller Integration", "FAIL", str(e), "UI", traceback.format_exc())
+    def test_13_worker_module_import(self):
+        import paper_worker
+        self.assertTrue(hasattr(paper_worker, 'run_startup_preflight'))
 
-        # Test 12: System Health Monitor
-        try:
-            self.log_result("Monitoring", "System Health Engine", "PASS")
-        except Exception as e:
-            self.log_result("Monitoring", "System Health Engine", "FAIL", str(e), "Monitoring", traceback.format_exc())
+    def test_14_worker_preflight_execution(self):
+        import paper_worker
+        self.assertTrue(paper_worker.run_startup_preflight())
 
-        self.generate_report()
+    def test_15_worker_execute_cycle_callable(self):
+        import paper_worker
+        self.assertTrue(callable(paper_worker.execute_paper_trade_cycle))
 
-    def generate_report(self):
-        print("--- TEST EXECUTION COMPLETED ---")
-        print(f"Total Tests: {self.total_tests}")
-        print(f"Passed: {self.passed_tests}")
-        print(f"Failed: {self.failed_tests}")
-        print(f"Skipped: 0")
-        print(f"Critical Failures: {self.critical_failures}")
-        
-        release_gate = "PASS" if self.failed_tests == 0 else "FAIL"
-        print(f"Release Gate: {release_gate}")
+    def test_16_worker_main_callable(self):
+        import paper_worker
+        self.assertTrue(callable(paper_worker.main))
 
-def main():
-    runner = RegressionTestRunner()
-    runner.run_all_tests()
+    def test_17_analytics_function_export(self):
+        self.assertTrue(hasattr(paper_analytics, 'get_daily_closed_trade_metrics'))
+
+    def test_18_risk_manager_type_check(self):
+        rm = portfolio_risk_manager.PortfolioRiskManager()
+        self.assertIsInstance(rm, portfolio_risk_manager.PortfolioRiskManager)
+
+
+def run_regression_suite():
+    print("Starting Automated Regression Tests...")
+    print("Testing Auto Coder Bug Detection & Worker Contract Safety\n")
+
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+
+    suite.addTests(loader.loadTestsFromTestCase(TestAutoCoderBugDetection))
+    suite.addTests(loader.loadTestsFromTestCase(TestWorkerImportContract))
+
+    runner = unittest.TextTestRunner(verbosity=1)
+    result = runner.run(suite)
+
+    print("\n--- TEST EXECUTION COMPLETED ---")
+    total_tests = result.testsRun
+    failed_tests = len(result.failures) + len(result.errors)
+    passed_tests = total_tests - failed_tests
+
+    print(f"Total Tests: {total_tests}")
+    print(f"Passed: {passed_tests}")
+    print(f"Failed: {failed_tests}")
+    print(f"Skipped: {len(result.skipped)}")
+    print(f"Critical Failures: {failed_tests}")
+
+    if result.wasSuccessful():
+        print("Release Gate: PASS")
+        return 0
+    else:
+        print("Release Gate: FAIL")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(run_regression_suite())
