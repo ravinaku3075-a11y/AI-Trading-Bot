@@ -1,56 +1,57 @@
-import sqlite3
 import os
+import sqlite3
 
-# Centralized Database Path Resolution (DB_PATH -> DATA_DIR/trades.db -> trades.db)
-_custom_db_path = os.getenv("DB_PATH")
-if _custom_db_path:
-    DB_PATH = _custom_db_path
-else:
-    _data_dir = os.getenv("DATA_DIR")
-    if _data_dir:
-        DB_PATH = os.path.join(_data_dir, "trades.db")
-    else:
-        DB_PATH = "trades.db"
-
-# Backward compatibility alias
-DB_NAME = DB_PATH
+DB_NAME = os.getenv("DB_PATH", "trades.db")
+DB_PATH = DB_NAME
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    """
+    Returns a connection to the SQLite database.
+    Ensures parent directory exists before creating/connecting to the database file.
+    """
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    conn = sqlite3.connect(DB_PATH)
+    return conn
 
 def init_db():
+    """
+    Initializes the database schema if tables do not exist.
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 1. Trades Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            symbol TEXT NOT NULL,
-            action TEXT NOT NULL,
-            price REAL NOT NULL,
-            quantity REAL NOT NULL,
-            status TEXT DEFAULT 'EXECUTED'
+            symbol TEXT,
+            action TEXT,
+            price REAL,
+            quantity REAL,
+            status TEXT,
+            timestamp TEXT
         )
     """)
 
-    # 2. Telegram Alerts Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS telegram_alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            alert_hash TEXT UNIQUE NOT NULL,
-            symbol TEXT NOT NULL,
-            signal_side TEXT NOT NULL,
-            event_timestamp TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('PENDING', 'SENT', 'FAILED')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            sent_at TIMESTAMP
+            signal_side TEXT,
+            status TEXT,
+            event_timestamp TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS closed_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            pnl REAL,
+            close_time TEXT
         )
     """)
 
     conn.commit()
     conn.close()
-
-if __name__ == "__main__":
-    init_db()
