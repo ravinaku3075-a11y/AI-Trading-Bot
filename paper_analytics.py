@@ -131,6 +131,14 @@ def get_full_production_dashboard_metrics(conn):
         "win_rate": 0.0,
         "realized_pnl": 0.0,
         "daily_pnl": 0.0,
+        "open_positions_count": 0,
+        "latest_trade": None,
+        "recent_trades": [],
+        "daily_loss_lock_status": False,
+        "observation_sample_size": 0
+    }
+
+    if conn is None:
         return payload
 
     try:
