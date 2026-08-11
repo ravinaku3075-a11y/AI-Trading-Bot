@@ -144,7 +144,7 @@ class TestDatabaseSchemaRecovery(unittest.TestCase):
 
 
 class TestDatabasePathHardening(unittest.TestCase):
-    """STEP 22C-2E DB Path Hardening Tests (3 New Tests)"""
+    """STEP 22C-2E DB Path Hardening Tests (3 Tests)"""
 
     def test_22_default_db_path_resolution(self):
         self.assertTrue(hasattr(sqlite_logger, 'DB_PATH'))
@@ -161,9 +161,34 @@ class TestDatabasePathHardening(unittest.TestCase):
         self.assertTrue(paper_worker.run_startup_preflight())
 
 
+class TestObservationDashboardMetrics(unittest.TestCase):
+    """STEP 22C-2F Observation Dashboard Read-Only Metrics Tests (3 New Tests)"""
+
+    def test_25_observation_metrics_normal_data(self):
+        conn = sqlite_logger.get_connection()
+        metrics = paper_analytics.get_observation_dashboard_metrics(conn)
+        conn.close()
+        self.assertIsInstance(metrics, dict)
+        self.assertIn("buy_count", metrics)
+        self.assertIn("executed_orders_count", metrics)
+
+    def test_26_observation_metrics_empty_db(self):
+        conn = sqlite3.connect(":memory:")
+        metrics = paper_analytics.get_observation_dashboard_metrics(conn)
+        conn.close()
+        self.assertIsInstance(metrics, dict)
+        self.assertEqual(metrics.get("buy_count"), 0)
+        self.assertEqual(metrics.get("closed_trade_count"), 0)
+
+    def test_27_observation_metrics_none_connection(self):
+        metrics = paper_analytics.get_observation_dashboard_metrics(None)
+        self.assertIsInstance(metrics, dict)
+        self.assertEqual(metrics.get("buy_count"), 0)
+
+
 def run_regression_suite():
     print("Starting Automated Regression Tests...")
-    print("Testing Auto Coder Bug Detection, Worker Safety, DB Recovery & Path Hardening\n")
+    print("Testing Auto Coder Bug Detection, Worker Safety, DB Recovery, Path Hardening & Observation Dashboard\n")
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -172,6 +197,7 @@ def run_regression_suite():
     suite.addTests(loader.loadTestsFromTestCase(TestWorkerImportContract))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseSchemaRecovery))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabasePathHardening))
+    suite.addTests(loader.loadTestsFromTestCase(TestObservationDashboardMetrics))
 
     runner = unittest.TextTestRunner(verbosity=1)
     result = runner.run(suite)

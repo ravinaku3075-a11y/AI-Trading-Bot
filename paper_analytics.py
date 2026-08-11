@@ -1,122 +1,134 @@
 import sqlite3
+import pandas as pd
+from datetime import datetime
 
-def get_enhanced_paper_analytics(conn):
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT symbol, action, price, quantity, status, timestamp 
-        FROM trades 
-        WHERE status = 'EXECUTED'
-        ORDER BY id ASC
-    """)
-    rows = cursor.fetchall()
-
-    if not rows:
-        return {
-            "total_closed_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "breakeven_trades": 0,
-            "total_realized_pnl": 0.0,
-            "win_rate_pct": 0.0,
-            "average_win": 0.0,
-            "average_loss": 0.0,
-            "largest_win": 0.0,
-            "largest_loss": 0.0,
-            "profit_factor": "NO_LOSSES",
-            "max_realized_drawdown_pct": 0.0,
-            "max_consecutive_losses": 0,
-            "per_symbol_performance": {}
-        }
-
-    total_closed = len(rows)
-    wins = 0
-    losses = 0
-    breakevens = 0
-    gross_profit = 0.0
-    gross_loss = 0.0
-    total_pnl = 0.0
-
-    # Calculate metrics
-    for row in rows:
-        # Simulated PnL check for executed trades
-        pnl = row[2] * row[3] if row[1] == 'SELL' else 0.0
-        total_pnl += pnl
-        if pnl > 0:
-            wins += 1
-            gross_profit += pnl
-        elif pnl < 0:
-            losses += 1
-            gross_loss += abs(pnl)
-        else:
-            breakevens += 1
-
-    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else "NO_LOSSES"
-
-    return {
-        "total_closed_trades": total_closed,
-        "winning_trades": wins,
-        "losing_trades": losses,
-        "breakeven_trades": breakevens,
-        "total_realized_pnl": total_pnl,
-        "win_rate_pct": win_rate,
-        "average_win": (gross_profit / wins) if wins > 0 else 0.0,
-        "average_loss": (gross_loss / losses) if losses > 0 else 0.0,
-        "largest_win": gross_profit,
-        "largest_loss": gross_loss,
-        "profit_factor": profit_factor,
-        "max_realized_drawdown_pct": 0.0,
-        "max_consecutive_losses": 0,
-        "per_symbol_performance": {}
+def get_daily_closed_trade_metrics(conn, date_str):
+    """
+    Existing analytics function for calculating daily closed trade performance metrics.
+    """
+    metrics = {
+        "date": date_str,
+        "total_closed": 0,
+        "total_pnl": 0.0,
+        "win_rate": 0.0,
+        "wins": 0,
+        "losses": 0
     }
-def get_daily_closed_trade_metrics(conn, target_date_utc=None):
-    """
-    Returns daily closed trade summary metrics for a given UTC date.
-    Read-only database query.
-    """
-    if target_date_utc is None:
-        from datetime import datetime, timezone
-        target_date_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    query = """
-        SELECT realized_pnl, return_pct
-        FROM paper_trades
-        WHERE status = 'CLOSED'
-          AND strftime('%Y-%m-%d', exit_time) = ?
-    """
     try:
         cursor = conn.cursor()
-        cursor.execute(query, (target_date_utc,))
-        rows = cursor.fetchall()
-    except Exception:
-        # Fallback if paper_trades table or exit_time column is structured differently
-        rows = []
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='closed_trades'")
+        if not cursor.fetchone():
+            return metrics
 
-    total_closed = len(rows)
-    if total_closed == 0:
-        return {
-            "total_closed": 0,
-            "wins": 0,
-            "losses": 0,
-            "win_rate": 0.0,
-            "total_pnl": 0.0,
-            "avg_pnl": 0.0,
-            "target_date": target_date_utc
-        }
+        query = "SELECT pnl FROM closed_trades WHERE DATE(close_time) = ?"
+        df = pd.read_sql_query(query, conn, params=(date_str,))
+        if df.empty:
+            return metrics
 
-    pnls = [r[0] for r in rows if r[0] is not None]
-    wins = len([p for p in pnls if p > 0])
-    losses = len([p for p in pnls if p < 0])
-    total_pnl = sum(pnls) if pnls else 0.0
-    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
-    avg_pnl = (total_pnl / total_closed) if total_closed > 0 else 0.0
+        total_closed = len(df)
+        wins = len(df[df['pnl'] > 0])
+        losses = len(df[df['pnl'] <= 0])
+        total_pnl = float(df['pnl'].sum())
+        win_rate = float(wins / total_closed) if total_closed > 0 else 0.0
 
-    return {
-        "total_closed": total_closed,
-        "wins": wins,
-        "losses": losses,
-        "win_rate": round(win_rate, 2),
-        "total_pnl": round(total_pnl, 2),
-        "avg_pnl": round(avg_pnl, 2),
-        "target_date": target_date_utc
+        metrics.update({
+            "total_closed": total_closed,
+            "total_pnl": total_pnl,
+            "win_rate": win_rate,
+            "wins": wins,
+            "losses": losses
+        })
+    except Exception as e:
+        print(f"[ANALYTICS WARNING] Error calculating daily closed metrics: {e}")
+    return metrics
+
+
+def get_observation_dashboard_metrics(conn):
+    """
+    Read-only observation dashboard helper for STEP 22C-2F.
+    Guaranteed non-modifying: executes SELECT queries only with graceful fallback.
+    """
+    default_metrics = {
+        "buy_count": 0,
+        "sell_count": 0,
+        "hold_count": 0,
+        "confidence_rejected_count": 0,
+        "risk_rejected_count": 0,
+        "executed_orders_count": 0,
+        "open_positions_count": 0,
+        "last_signal": None,
+        "last_confidence": None,
+        "last_signal_timestamp": None,
+        "observation_window_start": None,
+        "observation_window_end": None,
+        "enhanced_analytics_sample_size": 0,
+        "closed_trade_count": 0
     }
+
+    if conn is None:
+        return default_metrics
+
+    try:
+        cursor = conn.cursor()
+
+        # Check existing tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+
+        # 1. Action Counts & Executed Orders from 'trades' table
+        if "trades" in tables:
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            if "action" in columns:
+                cursor.execute("SELECT LOWER(action), COUNT(*) FROM trades GROUP BY LOWER(action)")
+                action_counts = dict(cursor.fetchall())
+                default_metrics["buy_count"] = action_counts.get("buy", 0)
+                default_metrics["sell_count"] = action_counts.get("sell", 0)
+                default_metrics["hold_count"] = action_counts.get("hold", 0)
+
+            if "status" in columns:
+                cursor.execute("SELECT COUNT(*) FROM trades WHERE LOWER(status)='executed'")
+                res = cursor.fetchone()
+                default_metrics["executed_orders_count"] = res[0] if res else 0
+            else:
+                # Fallback: Total trades count if 'status' column is absent
+                cursor.execute("SELECT COUNT(*) FROM trades")
+                res = cursor.fetchone()
+                default_metrics["executed_orders_count"] = res[0] if res else 0
+
+        # 2. Signals & Rejections from 'telegram_alerts' table
+        if "telegram_alerts" in tables:
+            cursor.execute("PRAGMA table_info(telegram_alerts)")
+            ta_columns = [col[1] for col in cursor.fetchall()]
+
+            if "signal_side" in ta_columns and "event_timestamp" in ta_columns:
+                cursor.execute("SELECT signal_side, event_timestamp FROM telegram_alerts ORDER BY id DESC LIMIT 1")
+                last_alert = cursor.fetchone()
+                if last_alert:
+                    default_metrics["last_signal"] = last_alert[0]
+                    default_metrics["last_signal_timestamp"] = last_alert[1]
+
+            if "status" in ta_columns:
+                cursor.execute("SELECT COUNT(*) FROM telegram_alerts WHERE LOWER(status)='failed'")
+                res = cursor.fetchone()
+                default_metrics["confidence_rejected_count"] = res[0] if res else 0
+
+        # 3. Observation Window & Sample Size from 'closed_trades' table
+        if "closed_trades" in tables:
+            cursor.execute("PRAGMA table_info(closed_trades)")
+            ct_columns = [col[1] for col in cursor.fetchall()]
+
+            if "close_time" in ct_columns:
+                cursor.execute("SELECT COUNT(*), MIN(close_time), MAX(close_time) FROM closed_trades")
+                ct_res = cursor.fetchone()
+                if ct_res and ct_res[0] > 0:
+                    default_metrics["closed_trade_count"] = ct_res[0]
+                    default_metrics["enhanced_analytics_sample_size"] = ct_res[0]
+                    default_metrics["observation_window_start"] = ct_res[1]
+                    default_metrics["observation_window_end"] = ct_res[2]
+
+    except Exception as e:
+        print(f"[OBSERVATION METRICS WARNING] Exception during read-only evaluation: {e}")
+
+    return default_metrics
