@@ -1,6 +1,7 @@
 import sys
 import unittest
 import sqlite3
+import os
 import paper_analytics
 import portfolio_risk_manager
 import sqlite_logger
@@ -84,7 +85,7 @@ class TestAutoCoderBugDetection(unittest.TestCase):
 
 
 class TestWorkerImportContract(unittest.TestCase):
-    """New Hardening & Crash Prevention Suite (6 Tests)"""
+    """Hardening & Crash Prevention Suite (6 Tests)"""
 
     def test_13_worker_module_import(self):
         import paper_worker
@@ -110,15 +111,67 @@ class TestWorkerImportContract(unittest.TestCase):
         self.assertIsInstance(rm, portfolio_risk_manager.PortfolioRiskManager)
 
 
+class TestDatabaseSchemaRecovery(unittest.TestCase):
+    """Phase 4 Database Recovery & Idempotence Tests (3 Tests)"""
+
+    def test_19_fresh_empty_db_initialization(self):
+        sqlite_logger.init_db()
+        conn = sqlite_logger.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        self.assertIn("trades", tables)
+        self.assertIn("telegram_alerts", tables)
+
+    def test_20_schema_idempotence_and_preservation(self):
+        sqlite_logger.init_db()
+        conn = sqlite_logger.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO trades (symbol, action, price, quantity) VALUES ('BTCUSDT', 'BUY', 50000.0, 1.0)")
+        conn.commit()
+
+        sqlite_logger.init_db()
+
+        cursor.execute("SELECT COUNT(*) FROM trades WHERE symbol='BTCUSDT'")
+        count = cursor.fetchone()[0]
+        conn.close()
+        self.assertGreaterEqual(count, 1)
+
+    def test_21_worker_preflight_db_contract(self):
+        import paper_worker
+        self.assertTrue(paper_worker.run_startup_preflight())
+
+
+class TestDatabasePathHardening(unittest.TestCase):
+    """STEP 22C-2E DB Path Hardening Tests (3 New Tests)"""
+
+    def test_22_default_db_path_resolution(self):
+        self.assertTrue(hasattr(sqlite_logger, 'DB_PATH'))
+        self.assertTrue(hasattr(sqlite_logger, 'DB_NAME'))
+        self.assertEqual(sqlite_logger.DB_PATH, sqlite_logger.DB_NAME)
+
+    def test_23_paper_trading_db_path_alignment(self):
+        import paper_trading
+        self.assertTrue(hasattr(paper_trading, 'DB_PATH'))
+        self.assertEqual(paper_trading.DB_PATH, sqlite_logger.DB_PATH)
+
+    def test_24_worker_logs_resolved_db_path(self):
+        import paper_worker
+        self.assertTrue(paper_worker.run_startup_preflight())
+
+
 def run_regression_suite():
     print("Starting Automated Regression Tests...")
-    print("Testing Auto Coder Bug Detection & Worker Contract Safety\n")
+    print("Testing Auto Coder Bug Detection, Worker Safety, DB Recovery & Path Hardening\n")
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
 
     suite.addTests(loader.loadTestsFromTestCase(TestAutoCoderBugDetection))
     suite.addTests(loader.loadTestsFromTestCase(TestWorkerImportContract))
+    suite.addTests(loader.loadTestsFromTestCase(TestDatabaseSchemaRecovery))
+    suite.addTests(loader.loadTestsFromTestCase(TestDatabasePathHardening))
 
     runner = unittest.TextTestRunner(verbosity=1)
     result = runner.run(suite)

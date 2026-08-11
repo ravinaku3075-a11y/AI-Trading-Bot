@@ -4,10 +4,9 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 
-from portfolio_risk_manager import validate_portfolio_risk
-from paper_analytics import analyze_paper_trades
-
-DB_PATH = "trades.db"
+from portfolio_risk_manager import PortfolioRiskManager
+import paper_analytics
+from sqlite_logger import DB_PATH
 CSV_PATH = "trade_journal.csv"
 
 def load_paper_trade_records():

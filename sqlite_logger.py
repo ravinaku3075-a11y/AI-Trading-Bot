@@ -1,16 +1,28 @@
 import sqlite3
 import os
 
-DB_NAME = "trades.db"
+# Centralized Database Path Resolution (DB_PATH -> DATA_DIR/trades.db -> trades.db)
+_custom_db_path = os.getenv("DB_PATH")
+if _custom_db_path:
+    DB_PATH = _custom_db_path
+else:
+    _data_dir = os.getenv("DATA_DIR")
+    if _data_dir:
+        DB_PATH = os.path.join(_data_dir, "trades.db")
+    else:
+        DB_PATH = "trades.db"
+
+# Backward compatibility alias
+DB_NAME = DB_PATH
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(DB_PATH)
 
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # 1. Existing Trades Table
+
+    # 1. Trades Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,8 +34,8 @@ def init_db():
             status TEXT DEFAULT 'EXECUTED'
         )
     """)
-    
-    # 2. STEP 22A Persistent Telegram Alerts Table
+
+    # 2. Telegram Alerts Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS telegram_alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,35 +48,9 @@ def init_db():
             sent_at TIMESTAMP
         )
     """)
+
     conn.commit()
     conn.close()
 
-# --- Alert Deduplication Helper Functions ---
-
-def register_alert_pending(conn, alert_hash, symbol, signal_side, event_timestamp):
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR IGNORE INTO telegram_alerts (alert_hash, symbol, signal_side, event_timestamp, status)
-        VALUES (?, ?, ?, ?, 'PENDING')
-    """, (alert_hash, symbol, signal_side, str(event_timestamp)))
-    conn.commit()
-
-def get_alert_status(conn, alert_hash):
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM telegram_alerts WHERE alert_hash = ?", (alert_hash,))
-    row = cursor.fetchone()
-    return row[0] if row else None
-
-def mark_alert_sent(conn, alert_hash):
-    cursor = conn.cursor()
-    cursor.execute("UPDATE telegram_alerts SET status = 'SENT', sent_at = CURRENT_TIMESTAMP WHERE alert_hash = ?", (alert_hash,))
-    conn.commit()
-
-def mark_alert_failed(conn, alert_hash):
-    cursor = conn.cursor()
-    cursor.execute("UPDATE telegram_alerts SET status = 'FAILED' WHERE alert_hash = ?", (alert_hash,))
-    conn.commit()
-
 if __name__ == "__main__":
     init_db()
-    print("Database initialized with trades & telegram_alerts tables.")
