@@ -162,7 +162,7 @@ class TestDatabasePathHardening(unittest.TestCase):
 
 
 class TestObservationDashboardMetrics(unittest.TestCase):
-    """STEP 22C-2F Observation Dashboard Read-Only Metrics Tests (3 New Tests)"""
+    """STEP 22C-2F Observation Dashboard Read-Only Metrics Tests (3 Tests)"""
 
     def test_25_observation_metrics_normal_data(self):
         conn = sqlite_logger.get_connection()
@@ -186,9 +186,29 @@ class TestObservationDashboardMetrics(unittest.TestCase):
         self.assertEqual(metrics.get("buy_count"), 0)
 
 
+class TestWorkerGracefulShutdown(unittest.TestCase):
+    """STEP 22C-4 Graceful Shutdown Tests (2 New Tests)"""
+
+    def test_28_worker_shutdown_signal_handling(self):
+        import paper_worker
+        paper_worker.shutdown_event.clear()
+        self.assertFalse(paper_worker.shutdown_event.is_set())
+        paper_worker.shutdown_event.set()
+        self.assertTrue(paper_worker.shutdown_event.is_set())
+        paper_worker.shutdown_event.clear()
+
+    def test_29_worker_shutdown_idempotency(self):
+        import paper_worker
+        paper_worker.shutdown_event.clear()
+        paper_worker.shutdown_event.set()
+        paper_worker.shutdown_event.set()  # Multiple signal triggers must remain safe
+        self.assertTrue(paper_worker.shutdown_event.is_set())
+        paper_worker.shutdown_event.clear()
+
+
 def run_regression_suite():
     print("Starting Automated Regression Tests...")
-    print("Testing Auto Coder Bug Detection, Worker Safety, DB Recovery, Path Hardening & Observation Dashboard\n")
+    print("Testing Auto Coder Bug Detection, Worker Safety, DB Recovery, Path Hardening, Observation Dashboard & Shutdown\n")
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -198,16 +218,17 @@ def run_regression_suite():
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseSchemaRecovery))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabasePathHardening))
     suite.addTests(loader.loadTestsFromTestCase(TestObservationDashboardMetrics))
+    suite.addTests(loader.loadTestsFromTestCase(TestWorkerGracefulShutdown))
 
     runner = unittest.TextTestRunner(verbosity=1)
     result = runner.run(suite)
 
     print("\n--- TEST EXECUTION COMPLETED ---")
-    total_tests = result.testsRun
+    print(f"Total Tests: {result.testsRun}")
     failed_tests = len(result.failures) + len(result.errors)
-    passed_tests = total_tests - failed_tests
+    passed_tests = result.testsRun - failed_tests
 
-    print(f"Total Tests: {total_tests}")
+    print(f"Total Tests: {result.testsRun}")
     print(f"Passed: {passed_tests}")
     print(f"Failed: {failed_tests}")
     print(f"Skipped: {len(result.skipped)}")

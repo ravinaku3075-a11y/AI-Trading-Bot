@@ -1,9 +1,24 @@
 import sys
 import time
 import sqlite3
+import signal
+import threading
 import paper_analytics
 import portfolio_risk_manager
 import sqlite_logger
+
+# Graceful Shutdown Event
+shutdown_event = threading.Event()
+
+def _signal_handler(signum, frame):
+    print(f"\n[SHUTDOWN] Signal {signum} received. Initiating graceful shutdown...")
+    shutdown_event.set()
+
+try:
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+except (ValueError, AttributeError):
+    pass
 
 def run_startup_preflight():
     print(f"[PRE-FLIGHT] Resolved DB Path: {sqlite_logger.DB_PATH}")
@@ -72,9 +87,13 @@ def main():
     if "--oneshot" in sys.argv:
         execute_paper_trade_cycle()
     else:
-        while True:
+        while not shutdown_event.is_set():
+            if shutdown_event.is_set():
+                break
             execute_paper_trade_cycle()
-            time.sleep(60)
+            if shutdown_event.wait(timeout=60):
+                break
+        print("[SHUTDOWN] Graceful worker shutdown complete.")
 
 if __name__ == "__main__":
     main()
