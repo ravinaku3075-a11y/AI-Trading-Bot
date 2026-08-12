@@ -14,9 +14,18 @@ conn = None
 db_healthy = False
 worker_healthy = True  # Default read-only state assumption
 
+# Step 23.2 Read-Only Analytics Variables
+cum_pnl_data = []
+symbol_data = []
+
 try:
     conn = sqlite_logger.get_connection()
     metrics = paper_analytics.get_full_production_dashboard_metrics(conn)
+
+    # Step 23.2 Read-Only Data Fetching
+    cum_pnl_data = paper_analytics.get_cumulative_pnl_timeseries(conn)
+    symbol_data = paper_analytics.get_symbol_performance_breakdown(conn)
+
     db_healthy = True
 
     # Risk Lock Check (Read-Only query)
@@ -27,6 +36,8 @@ try:
 except Exception as e:
     st.error(f"⚠️ Database Health Error: {e}")
     metrics = paper_analytics.get_full_production_dashboard_metrics(None)
+    cum_pnl_data = []
+    symbol_data = []
     db_healthy = False
 finally:
     if conn:
@@ -77,6 +88,28 @@ with col4:
 
 with col5:
     st.metric("Open Positions", metrics.get("open_positions_count", 0))
+
+st.divider()
+
+# --- STEP 23.2 READ-ONLY TREND & BREAKDOWN SECTION ---
+st.subheader("📈 Performance Trend & Symbol Breakdown")
+tab1, tab2 = st.tabs(["Cumulative P&L Trend", "Symbol Breakdown"])
+
+with tab1:
+    if cum_pnl_data:
+        import pandas as pd
+        df_pnl = pd.DataFrame(cum_pnl_data)
+        st.line_chart(df_pnl.set_index("time")["cumulative_pnl"])
+    else:
+        st.info("No closed trade history available for cumulative P&L chart.")
+
+with tab2:
+    if symbol_data:
+        import pandas as pd
+        df_sym = pd.DataFrame(symbol_data)
+        st.dataframe(df_sym, use_container_width=True)
+    else:
+        st.info("No symbol performance data available.")
 
 st.divider()
 

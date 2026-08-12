@@ -180,11 +180,96 @@ def test_phase23_empty_db_handling_safety():
     assert metrics["recent_trades"] == []
 
 
+# --- STEP 23.2 NEW ANALYTICS & READ-ONLY ISOLATION TESTS (2 TESTS) ---
+
+def test_step23_2_pnl_trend_and_empty_handling():
+    """Verify cumulative PnL time series calculation, empty/NULL handling, and row isolation."""
+    assert paper_analytics.get_cumulative_pnl_timeseries(None) == []
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE trades (
+                id INTEGER PRIMARY KEY,
+                status TEXT,
+                pnl REAL,
+                timestamp TEXT,
+                close_time TEXT
+            );
+        """)
+        cursor.execute("INSERT INTO trades VALUES (1, 'CLOSED', 100.0, '2026-08-11 10:00:00', '2026-08-11 10:05:00');")
+        cursor.execute("INSERT INTO trades VALUES (2, 'CLOSED', NULL, '2026-08-11 10:10:00', '2026-08-11 10:15:00');")
+        cursor.execute("INSERT INTO trades VALUES (3, 'CLOSED', -30.0, '2026-08-11 10:20:00', '2026-08-11 10:25:00');")
+        conn.commit()
+
+        ts = paper_analytics.get_cumulative_pnl_timeseries(conn)
+        assert len(ts) == 3
+        assert ts[0]["cumulative_pnl"] == 100.0
+        assert ts[1]["cumulative_pnl"] == 100.0  # NULL handled safely as 0.0
+        assert ts[2]["cumulative_pnl"] == 70.0
+
+        # Verify read-only isolation (row count unchanged)
+        cursor.execute("SELECT COUNT(*) FROM trades;")
+        assert cursor.fetchone()[0] == 3
+        conn.close()
+    finally:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+def test_step23_2_symbol_breakdown_aggregation():
+    """Verify symbol breakdown aggregation correctness, win rate calculation, and read-only safety."""
+    assert paper_analytics.get_symbol_performance_breakdown(None) == []
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE trades (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT,
+                status TEXT,
+                pnl REAL
+            );
+        """)
+        cursor.execute("INSERT INTO trades VALUES (1, 'BTCUSDT', 'CLOSED', 150.0);")
+        cursor.execute("INSERT INTO trades VALUES (2, 'BTCUSDT', 'CLOSED', -50.0);")
+        cursor.execute("INSERT INTO trades VALUES (3, 'ETHUSDT', 'CLOSED', 80.0);")
+        cursor.execute("INSERT INTO trades VALUES (4, 'SOLUSDT', 'OPEN', NULL);")
+        conn.commit()
+
+        breakdown = paper_analytics.get_symbol_performance_breakdown(conn)
+        assert len(breakdown) == 3
+
+        # BTCUSDT check
+        btc = next(b for b in breakdown if b["symbol"] == "BTCUSDT")
+        assert btc["trade_count"] == 2
+        assert btc["closed_count"] == 2
+        assert btc["wins"] == 1
+        assert btc["losses"] == 1
+        assert btc["win_rate"] == 50.0
+        assert btc["realized_pnl"] == 100.0
+
+        # Read-only verification
+        cursor.execute("SELECT COUNT(*) FROM trades;")
+        assert cursor.fetchone()[0] == 4
+        conn.close()
+    finally:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+
 # --- MAIN RUNNER SUITE ---
 
 def main():
     print("=" * 60)
-    print("🚀 RUNNING PRODUCTION REGRESSION & PHASE 23 MONITORING SUITE")
+    print("🚀 RUNNING PRODUCTION REGRESSION & STEP 23.2 SUITE")
     print("=" * 60)
 
     tests = [
@@ -220,7 +305,9 @@ def main():
         ("test_core_system_baseline_23", dummy_test_23),
         ("test_core_system_baseline_24", dummy_test_24),
         ("test_phase23_read_only_dashboard_safety", test_phase23_read_only_dashboard_safety),
-        ("test_phase23_empty_db_handling_safety", test_phase23_empty_db_handling_safety)
+        ("test_phase23_empty_db_handling_safety", test_phase23_empty_db_handling_safety),
+        ("test_step23_2_pnl_trend_and_empty_handling", test_step23_2_pnl_trend_and_empty_handling),
+        ("test_step23_2_symbol_breakdown_aggregation", test_step23_2_symbol_breakdown_aggregation)
     ]
 
     passed = 0

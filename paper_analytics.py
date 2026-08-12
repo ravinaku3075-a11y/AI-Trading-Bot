@@ -221,3 +221,92 @@ def get_full_production_dashboard_metrics(conn):
         logger.error(f"Error computing full production dashboard metrics: {e}")
 
     return payload
+# --- READ-ONLY STEP 23.2 ANALYTICS HELPERS ---
+
+def get_cumulative_pnl_timeseries(conn):
+    """
+    Returns chronological list of dicts [{'time': ..., 'cumulative_pnl': ...}]
+    for closed trades via SELECT query. Safe fallback if conn is None.
+    """
+    if conn is None:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades';")
+        if not cursor.fetchone():
+            return []
+
+        cursor.execute("""
+            SELECT COALESCE(close_time, timestamp) as t_time, pnl
+            FROM trades
+            WHERE status = 'CLOSED'
+            ORDER BY id ASC;
+        """)
+        rows = cursor.fetchall()
+
+        timeseries = []
+        running_total = 0.0
+        for row in rows:
+            t_time = row[0] if row[0] else "N/A"
+            pnl = row[1] if row[1] is not None else 0.0
+            running_total += pnl
+            timeseries.append({
+                "time": t_time,
+                "cumulative_pnl": round(running_total, 2)
+            })
+        return timeseries
+    except Exception as e:
+        logger.error(f"Error calculating cumulative PnL time series: {e}")
+        return []
+
+def get_symbol_performance_breakdown(conn):
+    """
+    Returns symbol-level breakdown via SELECT query. Safe fallback if conn is None.
+    """
+    if conn is None:
+        return []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades';")
+        if not cursor.fetchone():
+            return []
+
+        cursor.execute("""
+            SELECT
+                symbol,
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) as closed_count,
+                SUM(CASE WHEN status = 'CLOSED' AND pnl > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN status = 'CLOSED' AND pnl < 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN status = 'CLOSED' THEN COALESCE(pnl, 0.0) ELSE 0.0 END) as realized_pnl
+            FROM trades
+            GROUP BY symbol
+            ORDER BY realized_pnl DESC;
+        """)
+        rows = cursor.fetchall()
+
+        breakdown = []
+        for r in rows:
+            sym = r[0] if r[0] else "UNKNOWN"
+            total = r[1]
+            closed_cnt = r[2] if r[2] is not None else 0
+            wins = r[3] if r[3] is not None else 0
+            losses = r[4] if r[4] is not None else 0
+            realized_pnl = round(r[5], 2) if r[5] is not None else 0.0
+            win_rate = round((wins / closed_cnt * 100.0), 2) if closed_cnt > 0 else 0.0
+
+            breakdown.append({
+                "symbol": sym,
+                "trade_count": total,
+                "closed_count": closed_cnt,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "realized_pnl": realized_pnl
+            })
+        return breakdown
+    except Exception as e:
+        logger.error(f"Error fetching symbol performance breakdown: {e}")
+        return []
