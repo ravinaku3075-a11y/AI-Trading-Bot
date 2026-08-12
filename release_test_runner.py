@@ -265,11 +265,52 @@ def test_step23_2_symbol_breakdown_aggregation():
             os.remove(db_path)
 
 
+# --- STEP 23.3 HEALTH & DATA FRESHNESS TESTS (2 TESTS) ---
+
+def test_step23_3_health_metrics_keys_and_freshness():
+    """Verify health monitor keys, timestamp, and staleness logic."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Empty DB check
+        metrics = paper_analytics.get_system_health_and_freshness(conn)
+        assert metrics["db_healthy"] == False
+        assert metrics["data_freshness"] == "NO_DATA"
+        assert metrics["stale_warning"] == True
+
+        # Setup tables & insert trade
+        cursor.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, timestamp TEXT, close_time TEXT, pnl REAL);")
+        cursor.execute("INSERT INTO trades (timestamp, close_time, pnl) VALUES ('2026-08-12 07:00:00', '2026-08-12 07:15:00', 150.0);")
+        conn.commit()
+
+        metrics = paper_analytics.get_system_health_and_freshness(conn)
+        assert metrics["db_healthy"] == True
+        assert metrics["latest_timestamp"] == "2026-08-12 07:15:00"
+        assert metrics["data_freshness"] == "FRESH"
+        assert metrics["stale_warning"] == False
+
+        conn.close()
+    finally:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+def test_step23_3_health_empty_db_handling_safety():
+    """Verify None connection safety and read-only isolation."""
+    metrics = paper_analytics.get_system_health_and_freshness(None)
+    assert metrics["db_healthy"] == False
+    assert metrics["stale_warning"] == True
+    assert metrics["daily_loss_lock"] == "UNKNOWN"
+
+
 # --- MAIN RUNNER SUITE ---
 
 def main():
     print("=" * 60)
-    print("🚀 RUNNING PRODUCTION REGRESSION & STEP 23.2 SUITE")
+    print("🚀 RUNNING PRODUCTION REGRESSION & STEP 23.3 SUITE")
     print("=" * 60)
 
     tests = [
@@ -307,7 +348,9 @@ def main():
         ("test_phase23_read_only_dashboard_safety", test_phase23_read_only_dashboard_safety),
         ("test_phase23_empty_db_handling_safety", test_phase23_empty_db_handling_safety),
         ("test_step23_2_pnl_trend_and_empty_handling", test_step23_2_pnl_trend_and_empty_handling),
-        ("test_step23_2_symbol_breakdown_aggregation", test_step23_2_symbol_breakdown_aggregation)
+        ("test_step23_2_symbol_breakdown_aggregation", test_step23_2_symbol_breakdown_aggregation),
+        ("test_step23_3_health_metrics_keys_and_freshness", test_step23_3_health_metrics_keys_and_freshness),
+        ("test_step23_3_health_empty_db_handling_safety", test_step23_3_health_empty_db_handling_safety)
     ]
 
     passed = 0

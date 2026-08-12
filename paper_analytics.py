@@ -221,6 +221,8 @@ def get_full_production_dashboard_metrics(conn):
         logger.error(f"Error computing full production dashboard metrics: {e}")
 
     return payload
+
+
 # --- READ-ONLY STEP 23.2 ANALYTICS HELPERS ---
 
 def get_cumulative_pnl_timeseries(conn):
@@ -259,6 +261,7 @@ def get_cumulative_pnl_timeseries(conn):
     except Exception as e:
         logger.error(f"Error calculating cumulative PnL time series: {e}")
         return []
+
 
 def get_symbol_performance_breakdown(conn):
     """
@@ -310,3 +313,64 @@ def get_symbol_performance_breakdown(conn):
     except Exception as e:
         logger.error(f"Error fetching symbol performance breakdown: {e}")
         return []
+
+
+# --- READ-ONLY STEP 23.3 HEALTH & FRESHNESS MONITORS ---
+
+def get_system_health_and_freshness(conn):
+    """
+    Returns read-only health metrics, latest activity timestamp, and data freshness indicators.
+    Safe fallback if conn is None or database is empty.
+    """
+    payload = {
+        "db_healthy": False,
+        "latest_timestamp": "N/A",
+        "data_freshness": "NO_DATA",
+        "stale_warning": True,
+        "daily_loss_lock": "UNKNOWN"
+    }
+
+    if conn is None:
+        return payload
+
+    try:
+        cursor = conn.cursor()
+
+        # 1. Database Health Check
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades';")
+        if not cursor.fetchone():
+            return payload
+
+        payload["db_healthy"] = True
+
+        # 2. Latest Trade/Activity Timestamp
+        cursor.execute("SELECT MAX(COALESCE(close_time, timestamp)) FROM trades;")
+        row = cursor.fetchone()
+        latest_ts = row[0] if row and row[0] else None
+
+        if latest_ts:
+            payload["latest_timestamp"] = str(latest_ts)
+            payload["stale_warning"] = False
+            payload["data_freshness"] = "FRESH"
+        else:
+            payload["latest_timestamp"] = "No Trades Recorded"
+            payload["data_freshness"] = "EMPTY"
+            payload["stale_warning"] = True
+
+        # 3. Read Daily Loss Lock Status if daily_loss_lock table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_loss_lock';")
+        if cursor.fetchone():
+            cursor.execute("SELECT locked FROM daily_loss_lock ORDER BY id DESC LIMIT 1;")
+            lock_row = cursor.fetchone()
+            if lock_row:
+                payload["daily_loss_lock"] = "ACTIVE" if lock_row[0] else "INACTIVE"
+            else:
+                payload["daily_loss_lock"] = "INACTIVE"
+        else:
+            payload["daily_loss_lock"] = "NOT_CONFIGURED"
+
+        return payload
+
+    except Exception as e:
+        logger.error(f"Error computing health and freshness metrics: {e}")
+        return payload

@@ -17,6 +17,7 @@ worker_healthy = True  # Default read-only state assumption
 # Step 23.2 Read-Only Analytics Variables
 cum_pnl_data = []
 symbol_data = []
+health_data = {}
 
 try:
     conn = sqlite_logger.get_connection()
@@ -26,7 +27,10 @@ try:
     cum_pnl_data = paper_analytics.get_cumulative_pnl_timeseries(conn)
     symbol_data = paper_analytics.get_symbol_performance_breakdown(conn)
 
-    db_healthy = True
+    # Step 23.3 Read-Only Health & Data Freshness Fetching
+    health_data = paper_analytics.get_system_health_and_freshness(conn)
+
+    db_healthy = health_data.get("db_healthy", False)
 
     # Risk Lock Check (Read-Only query)
     rm = portfolio_risk_manager.PortfolioRiskManager()
@@ -38,14 +42,15 @@ except Exception as e:
     metrics = paper_analytics.get_full_production_dashboard_metrics(None)
     cum_pnl_data = []
     symbol_data = []
+    health_data = paper_analytics.get_system_health_and_freshness(None)
     db_healthy = False
 finally:
     if conn:
         conn.close()
 
-# --- HEALTH MONITOR PANEL (Phase 23.1) ---
+# --- HEALTH MONITOR PANEL (Phase 23.1 & Step 23.3) ---
 st.subheader("🟢 System & Pre-Flight Health")
-h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns(5)
+h_col1, h_col2, h_col3, h_col4, h_col5, h_col6 = st.columns(6)
 
 with h_col1:
     st.metric("WORKER HEALTH", "ONLINE 🟢" if worker_healthy else "OFFLINE 🔴")
@@ -65,7 +70,15 @@ with h_col5:
     storage_type = "PERSISTENT (/data)" if "/data" in db_path else "LOCAL PATH"
     st.metric("STORAGE PATH", storage_type)
 
-st.caption(f"🕐 Last Observation Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+with h_col6:
+    freshness = health_data.get("data_freshness", "NO_DATA")
+    fresh_icon = "🟢" if freshness == "FRESH" else "⚠️"
+    st.metric("DATA FRESHNESS", f"{fresh_icon} {freshness}")
+
+if health_data.get("stale_warning"):
+    st.warning("⚠️ Warning: No recent trade activity detected or database table is empty. Data freshness warning active.")
+
+st.caption(f"🕐 Last Observation Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')} | Latest DB TS: {health_data.get('latest_timestamp', 'N/A')}")
 st.divider()
 
 # --- READ-ONLY KPI METRICS ---
@@ -122,7 +135,9 @@ with col_a:
         "Persistent DB Path": sqlite_logger.DB_PATH,
         "Executed Orders Count": metrics.get("executed_orders_count", 0),
         "Observation Sample Size": metrics.get("observation_sample_size", 0),
-        "DB Health Status": "ACTIVE" if db_healthy else "FAILED"
+        "DB Health Status": "ACTIVE" if db_healthy else "FAILED",
+        "Latest Activity TS": health_data.get("latest_timestamp", "N/A"),
+        "Data Freshness Indicator": health_data.get("data_freshness", "NO_DATA")
     })
 
 with col_b:
